@@ -92,6 +92,9 @@ func run(inctx context.Context, srcDir, dstDir string, dry bool) error {
 		}
 
 		dstPath := strings.TrimSuffix(dstPathOldExt, oldExt) + ".mp3"
+		// FAT32 limitations:
+		dstPath = strings.Replace(dstPath, "?", "_ques_", -1)
+
 		if _, err := os.Stat(dstPath); os.IsNotExist(err) {
 			log.Println("Creating " + dstPath)
 			if !dry {
