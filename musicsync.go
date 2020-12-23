@@ -18,6 +18,8 @@ var (
 	srcDir = flag.String("src", "", "Source directory")
 	dstDir = flag.String("dst", "./", "Destination directory")
 	dryRun = flag.Bool("dry", true, "Dry run")
+	// This is needed to run on MTP mounted devices, which don't support move.
+	useTempFile = flag.Bool("tempfile", true, "Use a temp file for atomic moves")
 )
 
 func run(inctx context.Context, srcDir, dstDir string, dry bool) error {
@@ -96,7 +98,7 @@ func run(inctx context.Context, srcDir, dstDir string, dry bool) error {
 		dstPath = strings.Replace(dstPath, "?", "_ques_", -1)
 
 		if _, err := os.Stat(dstPath); os.IsNotExist(err) {
-			log.Println("Creating " + dstPath)
+			log.Println("Starting " + dstPath)
 			if !dry {
 				wg.Add(1)
 				go func() {
@@ -137,19 +139,31 @@ func convert(ctx context.Context, srcPath, dstPath, dstRootDir string, lim chan 
 	defer func() {
 		<-lim
 	}()
-	tf, err := ioutil.TempFile(dstRootDir, "converting")
-	if err != nil {
+	if err := os.MkdirAll(filepath.Dir(dstPath), 0775); err != nil {
 		return err
 	}
-	defer os.Remove(tf.Name())
+	var dst string
+	if *useTempFile {
+		tf, err := ioutil.TempFile(dstRootDir, "converting")
+		if err != nil {
+			return err
+		}
+		if err := tf.Close(); err != nil {
+			return err
+		}
+		defer os.Remove(tf.Name())
+		dst = tf.Name()
+	} else {
+		dst = dstPath
+	}
 
 	args := []string{
 		"-i", srcPath,
 		"-codec:a", "libmp3lame",
-		"-q:a", "2",
+		"-q:a", "0",
 		"-f", "mp3",
 		"-y",
-		tf.Name(),
+		dst,
 	}
 
 	cmd := exec.CommandContext(ctx, "ffmpeg", args...)
@@ -157,18 +171,20 @@ func convert(ctx context.Context, srcPath, dstPath, dstRootDir string, lim chan 
 	cmd.Stderr = buf
 
 	if err := cmd.Run(); err != nil {
-		log.Println("Failure \n" + string(buf.Bytes()))
-		return err
-	}
-	if err := tf.Close(); err != nil {
-		return err
-	}
-	if err := os.MkdirAll(filepath.Dir(dstPath), 0775); err != nil {
+		log.Println("Failure \n", err, string(buf.Bytes()))
 		return err
 	}
 
-	if err := os.Rename(tf.Name(), dstPath); err != nil {
+	if *useTempFile {
+		if err := os.Rename(dst, dstPath); err != nil {
+			return err
+		}
+	}
+
+	if fi, err := os.Stat(dstPath); err != nil {
 		return err
+	} else {
+		log.Println("Finished", fi.Name())
 	}
 
 	return nil
